@@ -1,0 +1,124 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Module dependencies.
+ */
+
+const app = require('../app');
+const async = require('async');
+const debug = require('debug')('mobile-auth-server:server');
+const http = require('http');
+const utils = require('../utils');
+const wicked = require('wicked-sdk');
+
+let authServerId = 'mobile-auth';
+if (process.env.AUTH_SERVER_NAME) {
+    authServerId = process.env.AUTH_SERVER_NAME;
+}
+app.set('server_name', authServerId);
+let authServerPath = '/auth-server';
+if (process.env.AUTH_SERVER_BASEPATH) {
+    authServerPath = process.env.AUTH_SERVER_BASEPATH;
+}
+app.set('base_path', authServerPath);
+
+console.log('Auth Server ID used: ' + authServerId + ', override with AUTH_SERVER_NAME.');
+console.log('Auth Server base path: ' + authServerPath + ', override with AUTH_SERVER_BASEPATH');
+
+var port = normalizePort(process.env.PORT || '3010');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+let server = null;
+
+const wickedOptions = {
+    userAgentName: 'smartsteuer.auth-server',
+    userAgentVersion: utils.getVersion()
+};
+
+async.series({
+    init: callback => wicked.initialize(wickedOptions, callback),
+    waitForKong: callback => wicked.awaitKongAdapter(callback),
+    initMachineUser: callback => wicked.initMachineUser(authServerId, callback),
+    authServerConfig: callback => wicked.apiGet('auth-servers/' + authServerId, callback),
+    initApp: callback => app.initApp(callback)
+}, function (err, results) {
+    console.error(err);
+    if (err)
+        throw err;
+
+    // Store the auth-server settings.
+    app.authConfig = results.authServerConfig;
+    console.log(app.authConfig);
+    console.log('Kong Adapter: ' + wicked.getInternalKongAdapterUrl());
+
+    // Now create the server
+    server = http.createServer(app);
+
+    // Listen on provided port, on all network interfaces.
+    server.listen(port);
+    server.on('error', onError);
+    server.on('listening', onListening);
+});
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+    var port = parseInt(val, 10);
+
+    if (isNaN(port)) {
+        // named pipe
+        return val;
+    }
+
+    if (port >= 0) {
+        // port number
+        return port;
+    }
+
+    return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+    if (error.syscall !== 'listen') {
+        throw error;
+    }
+
+    var bind = typeof port === 'string'
+        ? 'Pipe ' + port
+        : 'Port ' + port;
+
+    // handle specific listen errors with friendly messages
+    switch (error.code) {
+        case 'EACCES':
+            console.error(bind + ' requires elevated privileges');
+            process.exit(1);
+            break;
+        case 'EADDRINUSE':
+            console.error(bind + ' is already in use');
+            process.exit(1);
+            break;
+        default:
+            throw error;
+    }
+}
+
+// Event listener for HTTP server "listening" event.
+function onListening() {
+    const addr = server.address();
+    const bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
+    console.log('===================================');
+    console.log(' Mobile Auth Server up and running');
+    console.log('===================================');
+    debug('Listening on ' + bind);
+}
